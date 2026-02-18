@@ -62,6 +62,7 @@ def validate_suno_tags(text: str) -> str:
 def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_key: str = None) -> Dict[str, Any]:
     """Generate using Google Gemini API"""
     import google.generativeai as genai
+    from google.api_core.exceptions import InvalidArgument, PermissionDenied, ResourceExhausted
     
     if not api_key:
         raise ValueError("Gemini API key required")
@@ -69,7 +70,44 @@ def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_ke
     genai.configure(api_key=api_key)
     
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash-exp",
+        model_name="gemini-1.5-flash",  # ✅ Fixed: Stable model name
+        system_instruction=system
+    )
+    
+    generation_config = {}
+    if is_json:
+        generation_config["response_mime_type"] = "application/json"
+    
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config=generation_config
+        )
+        
+        text = response.text.strip()
+        text = re.sub(r'```json\s*|\s*```', '', text)
+        
+        if is_json:
+            try:
+                return {"success": True, "data": json.loads(text), "text": text}
+            except json.JSONDecodeError:
+                return {"success": False, "error": "Invalid JSON response from Gemini", "text": text}
+        
+        return {"success": True, "data": text, "text": text}
+        
+    except InvalidArgument as e:
+        return {"success": False, "error": f"Invalid request: {str(e)}. Check model name and API key permissions.", "text": None}
+    except PermissionDenied as e:
+        return {"success": False, "error": f"API Key permission denied: {str(e)}. Check your Gemini API dashboard.", "text": None}
+    except ResourceExhausted as e:
+        return {"success": False, "error": f"Rate limit exceeded: {str(e)}. Wait a moment and try again.", "text": None}
+    except Exception as e:
+        return {"success": False, "error": f"Gemini API error: {str(e)}", "text": None}
+    
+    genai.configure(api_key=api_key)
+    
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
         system_instruction=system
     )
     
