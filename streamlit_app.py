@@ -1,224 +1,253 @@
-import streamlit as st
-import json
+"""
+SUNO EXPERT AI MODULE - Web Search Enhanced v6.0
+Real-time artist/song research + Proper Pro Vocals toggle
+"""
 import os
+import json
 import re
+import requests
 import time
-from datetime import datetime
-from suno_expert import generate_suno_prompt, validate_suno_tags, MAX_MODE_TAGS
+from typing import Dict, Any, Optional
+from dotenv import load_dotenv
 
-# Page config
-st.set_page_config(
-    page_title="🎵 Suno Max Pro",
-    page_icon="🎵",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+try:
+    from duckduckgo_search import DDGS
+    SEARCH_AVAILABLE = True
+except ImportError:
+    SEARCH_AVAILABLE = False
 
-# Custom CSS - Clean, Readable, Professional
-st.markdown("""
-<style>
-    .stApp {background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%);}
-    .stMarkdown, .stText, .stNumberInput, .stTextInput, .stSelectbox {color: #e8e8e8 !important;}
-    .stTextInput > div > div > input, .stTextArea > div > div > textarea, .stSelectbox > div > div > select {
-        background: #1e1e2f !important; border: 1px solid #3a3a5c !important;
-        color: #ffffff !important; border-radius: 8px !important; padding: 10px !important; font-size: 14px !important;
-    }
-    .stTextInput > div > div > input:focus, .stTextArea > div > div > textarea:focus {
-        border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
-    }
-    .stButton > button {
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; color: #ffffff !important;
-        border: none !important; border-radius: 8px !important; padding: 12px 24px !important;
-        font-size: 14px !important; font-weight: 600 !important; cursor: pointer !important;
-    }
-    .stButton > button:hover {transform: translateY(-1px) !important; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4) !important;}
-    .success-box {background: rgba(34, 197, 94, 0.15) !important; border-left: 4px solid #22c55e !important;
-        padding: 16px !important; border-radius: 8px !important; color: #86efac !important; margin: 16px 0 !important;}
-    .error-box {background: rgba(239, 68, 68, 0.15) !important; border-left: 4px solid #ef4444 !important;
-        padding: 16px !important; border-radius: 8px !important; color: #fca5a5 !important; margin: 16px 0 !important;}
-    .stCode {background: #1e1e2f !important; border: 1px solid #3a3a5c !important; border-radius: 8px !important;}
-    .stCode code {color: #e8e8e8 !important; font-size: 13px !important; line-height: 1.6 !important;}
-    [data-testid="stSidebar"] {background: #16162a !important; border-right: 1px solid #3a3a5c !important;}
-    h1, h2, h3 {color: #ffffff !important; font-weight: 600 !important;}
-    h1 {font-size: 28px !important;} h2 {font-size: 22px !important;} h3 {font-size: 18px !important;}
-    .badge {display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; margin: 4px 0;}
-    .badge-groq {background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid #6366f1;}
-    .badge-success {background: rgba(34, 197, 94, 0.2); color: #86efac; border: 1px solid #22c55e;}
-    .tag-example {background: rgba(99, 102, 241, 0.15); border: 1px dashed #6366f1;
-        padding: 6px 10px; border-radius: 6px; font-family: monospace; font-size: 12px; color: #c7d2fe; margin: 4px 0; display: inline-block;}
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
+load_dotenv()
 
-# Session state
-if "result" not in st.session_state:
-    st.session_state.result = None
-if "last_config" not in st.session_state:
-    st.session_state.last_config = {}
+SUNO_STRUCTURE = ["Intro", "Verse", "Pre-Chorus", "Chorus", "Post-Chorus", "Bridge", "Outro", "Hook"]
+SUNO_VOCALS = ["Male Vocal", "Female Vocal", "Duet", "Choir", "Whisper", "Spoken Word", "Rap", "Falsetto", "Belting"]
+SUNO_DELIVERY = ["Soft", "Powerful", "Breathy", "Clear", "Gritty", "Smooth", "Aggressive", "Emotional", "Intimate"]
+SUNO_EFFECTS = ["Reverb", "Delay", "AutoTune", "Wide Stereo", "Centered", "Harmonies", "3D Harmony", "Ad-libs"]
 
-# ============== SIDEBAR ==============
-with st.sidebar:
-    st.title("⚙️ Configuration")
-    st.markdown('<span class="badge badge-groq">🔵 Groq + Web Search</span>', unsafe_allow_html=True)
-    st.divider()
+MAX_MODE_TAGS = """[Is_MAX_MODE: MAX]
+[QUALITY: MASTERING_GRADE]
+[REALISM: STUDIO_RECORDING]
+[REAL_INSTRUMENTS: TRUE]
+[AUDIO_SPEC: 24-bit_96kHz_WIDE_STEREO]
+[PRODUCTION: PROFESSIONAL_MIX]"""
+
+def validate_suno_tags(text: str) -> str:
+    """Clean and validate Suno tags"""
+    if not text:
+        return text
+    # Remove stray characters and AI chatter
+    text = re.sub(r'[\{\}\"\\]', '', text)
+    text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+    text = re.sub(r'\*{2,}', '', text)
+    # Remove AI introductory phrases
+    text = re.sub(r'Here\'s a.*?prompt.*?:', '', text, flags=re.I)
+    text = re.sub(r'Based on research.*?:', '', text, flags=re.I)
+    text = re.sub(r'Here is.*?:', '', text, flags=re.I)
+    text = re.sub(r'^\s*[-•*]\s*', '', text, flags=re.M)
+    # Standardize tags
+    for tag in SUNO_STRUCTURE:
+        text = re.sub(rf'\[{tag.lower()}\]', f'[{tag}]', text, flags=re.I)
+    for tag in SUNO_VOCALS + SUNO_DELIVERY + SUNO_EFFECTS:
+        text = re.sub(rf'\[{tag.lower()}\]', f'[{tag}]', text, flags=re.I)
+    # Clean up
+    text = re.sub(r'\[([^\]]+)\](\s*\[\1\])+', r'[\1]', text)
+    text = re.sub(r'\]\[', '] [', text)
+    text = re.sub(r'\[\s*\]', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+    return text
+
+def search_web_for_artist(artist_query: str) -> str:
+    """Search web for artist/song production style"""
+    if not SEARCH_AVAILABLE:
+        return "Search unavailable."
+    try:
+        ddgs = DDGS()
+        results_text = []
+        queries = [
+            f"{artist_query} music production style instrumentation vocal technique",
+            f"{artist_query} sound characteristics BPM mixing mastering",
+            f"{artist_query} similar artists influences music style"
+        ]
+        for q in queries:
+            results = ddgs.text(q, max_results=2)
+            for r in results:
+                if 'body' in r:
+                    results_text.append(r['body'])
+        if not results_text:
+            return "No search results found."
+        return "\n".join(results_text)[:3000]
+    except Exception as e:
+        return f"Search error: {str(e)}"
+
+def clean_json_response(text: str) -> Dict[str, Any]:
+    """Extract and parse JSON from AI response"""
+    if not text:
+        return {"success": False, "error": "Empty response"}
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*', '', text)
+    text = text.strip()
+    try:
+        return {"success": True, "data": json.loads(text)}
+    except:
+        pass
+    json_match = re.search(r'\{[\s\S]*\}', text)
+    if json_match:
+        try:
+            return {"success": True, "data": json.loads(json_match.group())}
+        except:
+            pass
+    result = {}
+    title_match = re.search(r'["\']?title["\']?\s*[:=]\s*["\']([^"\']+)["\']', text, re.I)
+    if title_match:
+        result["title"] = title_match.group(1).strip()
+    lyrics_match = re.search(r'["\']?lyrics["\']?\s*[:=]\s*["\']([\s\S]*?)["\']\s*[\},]', text, re.I)
+    if lyrics_match:
+        result["lyrics"] = lyrics_match.group(1).strip()
+    if "lyrics" in result and "title" in result:
+        return {"success": True, "data": result}
+    return {"success": False, "error": "Could not parse JSON", "raw": text[:200]}
+
+def generate_with_groq(prompt: str, system: str, is_json: bool = False, api_key: str = None) -> Dict[str, Any]:
+    """Generate using Groq Cloud API"""
+    if not api_key:
+        return {"success": False, "error": "Groq API key required", "text": None}
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    model = "llama-3.1-8b-instant"
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    if is_json:
+        messages[-1]["content"] += "\n\n⚠️ CRITICAL: ONLY valid JSON. NO extra text. NO markdown. NO introductions."
+    payload = {"model": model, "messages": messages, "temperature": 0.1, "max_tokens": 2500, "top_p": 0.9}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        if response.status_code == 429:
+            return {"success": False, "error": "Rate limit. Wait 10s.", "text": None}
+        if response.status_code == 401:
+            return {"success": False, "error": "Invalid Groq API key", "text": None}
+        response.raise_for_status()
+        result = response.json()
+        text = result["choices"][0]["message"]["content"].strip()
+        if is_json:
+            parsed = clean_json_response(text)
+            parsed["text"] = text
+            return parsed
+        return {"success": True, "data": text, "text": text}
+    except Exception as e:
+        return {"success": False, "error": f"Groq error: {str(e)}", "text": None}
+
+def generate_suno_prompt(config: Dict[str, str], max_mode: bool = True, vocal_directing: bool = True) -> Dict[str, Any]:
+    """Main generation function - with Pro Vocals toggle logic"""
     
-    st.markdown("### 📝 Song Details")
-    col1, col2 = st.columns(2)
-    with col1:
-        language = st.text_input("Language", value="Spanish", key="inp_lang")
-        bpm = st.text_input("BPM", value="AUTO", key="inp_bpm")
-    with col2:
-        duration = st.text_input("Duration", value="2:30min", key="inp_dur")
-        vocal_type = st.selectbox("Vocal Type", ["Male", "Female", "Duet", "Choir", "Kids"], key="inp_vocal")
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return {"error": "GROQ_API_KEY not set in Streamlit Secrets"}
     
-    genre = st.text_input("Genre or Artist", placeholder="e.g., The Weeknd, Rosalía, Bohemian Rhapsody...", key="inp_genre")
-    topic = st.text_area("Creative Prompt", placeholder="Describe theme, story, or mood...", height=80, key="inp_topic")
+    genre = config.get("genre", "").strip()
+    topic = config.get("topic", "").strip()
+    language = config.get("language", "English")
+    vocal_type = config.get("vocalType", "Male")
+    bpm = config.get("bpm", "AUTO").strip()
+    duration = config.get("duration", "2:30min")
     
-    st.divider()
-    st.markdown("### ⚡ Options")
-    max_mode = st.toggle("MAX Mode", value=True, key="opt_max")
-    vocal_directing = st.toggle("Pro Vocals", value=True, key="opt_vocal")
-    
-    st.divider()
-    groq_key = os.getenv("GROQ_API_KEY")
-    if groq_key:
-        st.markdown('<span class="badge badge-success">✅ API Key: Ready</span>', unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="badge">⚠️ API Key: Missing</span>', unsafe_allow_html=True)
-    
-    # ✅ DEFINE BUTTON FIRST (before checking it)
-    generate_btn = st.button("🚀 Generate Prompt", type="primary", use_container_width=True, key="btn_generate")
-
-# ============== MAIN CONTENT ==============
-st.title("🎵 Suno Max Pro")
-st.markdown("*Professional AI prompt generator with Web Research*")
-
-with st.expander("📚 Suno Tag Reference"):
-    col_t1, col_t2, col_t3 = st.columns(3)
-    with col_t1:
-        st.markdown("**Structure**")
-        for tag in ["Intro", "Verse", "Chorus", "Bridge", "Outro"]:
-            st.markdown(f'<span class="tag-example">[{tag}]</span>', unsafe_allow_html=True)
-    with col_t2:
-        st.markdown("**Vocals**")
-        for tag in ["Male Vocal", "Female Vocal", "Breathy", "Powerful"]:
-            st.markdown(f'<span class="tag-example">[{tag}]</span>', unsafe_allow_html=True)
-    with col_t3:
-        st.markdown("**Effects**")
-        for tag in ["Reverb", "Delay", "Wide Stereo", "AutoTune"]:
-            st.markdown(f'<span class="tag-example">[{tag}]</span>', unsafe_allow_html=True)
-
-st.divider()
-
-# ============== RESULTS SECTION ==============
-if st.session_state.result:
-    result = st.session_state.result
-    
-    if result.get("error"):
-        st.markdown(f'<div class="error-box">❌ <strong>Error:</strong> {result["error"]}</div>', unsafe_allow_html=True)
-    else:
-        # Show research status if available
-        if result.get("search_status"):
-            st.info(f"🔍 {result['search_status']}")
-        
-        st.markdown(f'''<div class="success-box">
-            ✅ <strong>Generated Successfully!</strong> | 
-            Backend: {result["backend_used"].upper()} | 
-            Title: <em>{result["title"]}</em> |
-            Research: {"✅ Used" if result.get("research_used") else "❌ Skipped (generic genre)"}
-        </div>''', unsafe_allow_html=True)
-        
-        col_style, col_lyrics = st.columns(2)
-        
-        with col_style:
-            st.markdown("### 🎛️ Style Prompt")
-            st.markdown("*Copy to Suno's \"Style of Music\" field*")
-            st.code(result["style_prompt"], language="text", line_numbers=False)
-            char_count = len(result["style_prompt"])
-            st.caption(f"📊 {char_count} characters")
-        
-        with col_lyrics:
-            st.markdown("### 📝 Lyrics & Tags")
-            st.markdown("*Copy to Suno's \"Lyrics\" field (Custom Mode)*")
-            st.text_area("Lyrics Output", value=result["lyrics"], height=350, key="txt_lyrics", label_visibility="collapsed")
-        
-        st.divider()
-        st.markdown("### 💾 Export")
-        col_exp1, col_exp2 = st.columns(2)
-        
-        with col_exp1:
-            prompt_content = f"""SUNO AI PROMPT - {result['title']}
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-{'='*50}
-
-STYLE PROMPT:
-{result['style_prompt']}
-
-LYRICS & TAGS:
-{result['lyrics']}
-"""
-            st.download_button("📄 Download Full Prompt", data=prompt_content,
-                file_name=f"{result['title'].lower().replace(' ', '_')}_prompt.txt",
-                mime="text/plain", use_container_width=True)
-        
-        with col_exp2:
-            clean_lyrics = re.sub(r'\[Style:.*?\]\n?', '', result['lyrics'])
-            clean_lyrics = re.sub(r'\[Duration:.*?\]\n?', '', clean_lyrics)
-            clean_lyrics = re.sub(r'\[BPM:.*?\]\n?', '', clean_lyrics)
-            clean_lyrics = re.sub(r'\[Is_MAX_MODE:.*?\]\n?', '', clean_lyrics)
-            clean_lyrics = re.sub(r'\[QUALITY:.*?\]\n?', '', clean_lyrics)
-            clean_lyrics = re.sub(r'\[(Male|Female|Duet|Choir|Kids) Vocal\]\s*', '', clean_lyrics)
-            
-            lyrics_content = f"""CLEAN LYRICS - {result['title']}
-{'='*50}
-
-{clean_lyrics.strip()}
-"""
-            st.download_button("📄 Download Clean Lyrics", data=lyrics_content,
-                file_name=f"{result['title'].lower().replace(' ', '_')}_lyrics.txt",
-                mime="text/plain", use_container_width=True)
-
-# ============== GENERATE ACTION (AFTER button is defined) ==============
-if generate_btn:
     if not genre or not topic:
-        st.markdown('<div class="error-box">⚠️ <strong>Missing Input:</strong> Please fill in both <em>Genre/Artist</em> and <em>Creative Prompt</em> fields</div>', unsafe_allow_html=True)
-    else:
-        # Check if it looks like an artist/song name (for search progress display)
-        is_artist_like = len(genre.split()) > 1 and any(c.isupper() for c in genre)
-        
-        if is_artist_like:
-            with st.status("🔍 Researching artist style on the web...", expanded=True) as status:
-                st.write("Searching for production details...")
-                time.sleep(0.5)
-                st.write("Analyzing vocal techniques...")
-                time.sleep(0.5)
-                st.write("Generating detailed prompt...")
-                
-                config = {
-                    "genre": genre, "topic": topic, "language": language,
-                    "vocalType": vocal_type, "bpm": bpm, "duration": duration
-                }
-                
-                result = generate_suno_prompt(config, max_mode, vocal_directing)
-                st.session_state.result = result
-                st.session_state.last_config = config
-                
-                if result.get("success"):
-                    status.update(label="✅ Research & Generation Complete!", state="complete")
-                else:
-                    status.update(label="❌ Generation Failed", state="error")
+        return {"error": "Genre and Creative Prompt are required"}
+    
+    # STEP 1: Web search for artist/song
+    search_results = ""
+    search_status = "Generic genre (no search)"
+    is_artist_like = len(genre.split()) > 1 and any(c.isupper() for c in genre)
+    
+    if is_artist_like:
+        search_results = search_web_for_artist(genre)
+        if search_results and "error" not in search_results.lower():
+            search_status = f"✅ Web research complete ({len(search_results)} chars)"
         else:
-            with st.spinner("🤖 Generating with Groq..."):
-                config = {
-                    "genre": genre, "topic": topic, "language": language,
-                    "vocalType": vocal_type, "bpm": bpm, "duration": duration
-                }
-                result = generate_suno_prompt(config, max_mode, vocal_directing)
-                st.session_state.result = result
-                st.session_state.last_config = config
+            search_status = "⚠️ Limited search data, using AI knowledge"
+    
+    # STEP 2: Generate style prompt
+    if search_results and "error" not in search_results.lower():
+        style_prompt_raw = f"""Analyze this research and create a detailed Suno style prompt (max 1000 chars, comma-separated tags):
+RESEARCH: {search_results}
+OUTPUT: Only the style tags, no introductions, no explanations."""
         
-        st.rerun()
+        style_result = generate_with_groq(style_prompt_raw, 
+            "You are a music production expert. Output ONLY style tags, no intro text.", 
+            False, api_key)
+        style_prompt = style_result.get("data", f"{genre}, contemporary production") if style_result.get("success") else f"{genre}, contemporary production"
+        research_used = True
+    else:
+        style_prompt = f"{genre}, contemporary production, melodic, emotional vocals"
+        research_used = False
+    
+    if bpm.upper() != "AUTO":
+        style_prompt = f"{style_prompt}, BPM: {bpm}"
+    if max_mode:
+        style_prompt = f"{MAX_MODE_TAGS}\n{style_prompt}"
+    
+    # STEP 3: Generate lyrics (Pro Vocals ON vs OFF)
+    if vocal_directing:
+        # PRO VOCALS ON - Detailed vocal tags
+        lyrics_system = """You are SUNO MASTER. Create lyrics with DETAILED vocal directing:
+- BEFORE each section: [Vocal Type] [Delivery] [Effect] [Section]
+- WITHIN lyrics: (expression tags) for individual lines
+- Use: [Whisper], [Spoken Word], [Harmonies], [3D Harmony], [Falsetto], [Belting], [Ad-libs]
+- Vary delivery per section
+- 120-250 words for 2-3 min"""
+        
+        lyrics_prompt = f"""Write song lyrics in {language}.
+TOPIC: {topic}
+STYLE: {style_prompt}
+VOCAL TYPE: {vocal_type}
+DURATION: {duration}
 
-# ============== FOOTER ==============
-st.divider()
-st.markdown('<div style="text-align: center; color: #6b7280; font-size: 12px; padding: 20px 0;">🎵 Suno Max Pro v6.0 • Web Search Enabled • Made for Altea</div>', unsafe_allow_html=True)
+OUTPUT JSON ONLY - NO INTRO TEXT:
+{{"title": "Song Title", "lyrics": "[Style: {vocal_type} Vocal]\\n[Duration: {duration}]\\n\\n[Intro]\\n(instrumental)\\n\\n[Verse 1]\\n[{vocal_type} Vocal] [Intimate] [Centered]\\nFirst line (whispered)\\nSecond line (building emotion)\\n\\n[Chorus]\\n[{vocal_type} Vocal] [Powerful] [Wide Stereo] [Harmonies]\\nHook line (belt with emotion)\\n\\n[Continue full structure with detailed vocal tags for EVERY section and line]"}}
+
+⚠️ ONLY JSON. NO introductions. NO explanations."""
+    else:
+        # PRO VOCALS OFF - Basic structure tags only
+        lyrics_system = """You are a songwriter. Create lyrics with BASIC structure tags only:
+- Use ONLY: [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro]
+- NO vocal type tags
+- NO delivery tags
+- NO expression parentheses
+- Clean, simple format"""
+        
+        lyrics_prompt = f"""Write song lyrics in {language}.
+TOPIC: {topic}
+STYLE: {style_prompt}
+DURATION: {duration}
+
+OUTPUT JSON ONLY - NO INTRO TEXT:
+{{"title": "Song Title", "lyrics": "[Style: {vocal_type} Vocal]\\n[Duration: {duration}]\\n\\n[Intro]\\nInstrumental\\n\\n[Verse 1]\\nLyrics here\\n\\n[Chorus]\\nHook lyrics\\n\\n[Continue with basic structure tags only]"}}
+
+⚠️ ONLY JSON. NO vocal tags. NO expression tags. NO introductions."""
+    
+    lyrics_result = generate_with_groq(lyrics_prompt, lyrics_system, True, api_key)
+    
+    if not lyrics_result.get("success"):
+        return {"error": f"Lyrics generation failed: {lyrics_result.get('error')}"}
+    
+    content = lyrics_result["data"]
+    title = content.get("title", "Untitled").strip() or "Untitled"
+    raw_lyrics = content.get("lyrics", "")
+    cleaned_lyrics = validate_suno_tags(raw_lyrics)
+    
+    # Ensure metadata tags at start
+    if "[Style:" not in cleaned_lyrics:
+        cleaned_lyrics = f"[Style: {vocal_type} Vocal]\n[Duration: {duration}]\n{f'[BPM: {bpm}]' if bpm.upper() != 'AUTO' else ''}\n\n{cleaned_lyrics}"
+    
+    # Final cleanup - remove any remaining AI chatter
+    cleaned_lyrics = re.sub(r'[\{\}\"\\]', '', cleaned_lyrics)
+    cleaned_lyrics = re.sub(r'^\s*Here.*?:\s*', '', cleaned_lyrics, flags=re.I | re.M)
+    
+    return {
+        "success": True,
+        "style_prompt": validate_suno_tags(style_prompt),
+        "title": title,
+        "lyrics": cleaned_lyrics,
+        "backend_used": "groq",
+        "research_used": research_used,
+        "search_status": search_status,
+        "vocal_directing_used": vocal_directing
+    }
