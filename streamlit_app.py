@@ -8,9 +8,6 @@ from suno_expert import generate_suno_prompt, validate_suno_tags, MAX_MODE_TAGS
 # Page config
 st.set_page_config(page_title="🎵 Suno Max Pro", page_icon="🎵", layout="wide")
 
-# 🔧 HARDCODED: Use Hugging Face backend (no dropdown confusion)
-BACKEND = "huggingface"
-
 # Custom CSS
 st.markdown("""
 <style>
@@ -39,8 +36,8 @@ if "result" not in st.session_state:
 with st.sidebar:
     st.title("⚙️ Config")
     
-    # 🔧 Backend badge (hardcoded)
-    st.markdown('<div style="background:rgba(168,85,247,0.2);border:1px solid #a855f7;color:#d8b4fe;padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.75rem;font-weight:700">🟣 Backend: Hugging Face</div>', unsafe_allow_html=True)
+    # Backend badge
+    st.markdown('<div style="background:rgba(59,130,246,0.2);border:1px solid #3b82f6;color:#93c5fd;padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.75rem;font-weight:700">🔵 Backend: Groq Cloud</div>', unsafe_allow_html=True)
     
     st.divider()
     
@@ -65,15 +62,15 @@ with st.sidebar:
     generate_btn = st.button("🚀 Generate", type="primary", use_container_width=True)
     
     # Token status
-    hf_token = os.getenv("HF_API_TOKEN")
-    if hf_token:
-        st.markdown('<div style="color:#22c55e;font-size:0.75rem">✅ HF Token: Loaded</div>', unsafe_allow_html=True)
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key:
+        st.markdown('<div style="color:#22c55e;font-size:0.75rem">✅ Groq Key: Loaded</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div style="color:#ef4444;font-size:0.75rem">❌ HF Token: Missing</div>', unsafe_allow_html=True)
+        st.markdown('<div style="color:#ef4444;font-size:0.75rem">❌ Groq Key: Missing</div>', unsafe_allow_html=True)
 
 # Main
 st.title("🎵 Suno Max Pro")
-st.markdown("*Expert AI prompt generator • Hugging Face Backend • Tag-Validated*")
+st.markdown("*Expert AI prompt generator • Groq Backend • Tag-Validated*")
 
 # Results
 if st.session_state.result:
@@ -118,7 +115,7 @@ if generate_btn:
     if not genre or not topic:
         st.error("⚠️ Please fill in *Genre* and *Creative Prompt*")
     else:
-        with st.spinner(f"🤖 Generating with {BACKEND.upper()}..."):
+        with st.spinner(f"🤖 Generating with GROQ..."):
             config = {
                 "genre": genre, "topic": topic, "language": language,
                 "vocalType": vocal_type, "bpm": bpm, "duration": duration
@@ -129,4 +126,4 @@ if generate_btn:
 
 # Footer
 st.divider()
-st.markdown('<div style="text-align: center; color: #64748b; font-size: 0.75rem;">🎵 Made for Altea • HF Backend</div>', unsafe_allow_html=True)
+st.markdown('<div style="text-align: center; color: #64748b; font-size: 0.75rem;">🎵 Made for Altea • Groq Backend</div>', unsafe_allow_html=True)
