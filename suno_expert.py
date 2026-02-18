@@ -1,5 +1,5 @@
 """
-SUNO EXPERT AI MODULE - Hugging Face Optimized
+SUNO EXPERT AI MODULE - Hugging Face (Phi-3 Model)
 Reliable prompt generation for Suno AI
 """
 import os
@@ -10,8 +10,6 @@ from typing import Dict, Any
 from dotenv import load_dotenv
 
 load_dotenv()
-
-IS_CLOUD = "STREAMLIT_RUNTIME" in os.environ
 
 # Suno tags reference
 SUNO_STRUCTURE_TAGS = ["Intro", "Verse", "Pre-Chorus", "Chorus", "Post-Chorus", "Bridge", "Outro", "Hook"]
@@ -44,17 +42,17 @@ def validate_suno_tags(text: str) -> str:
     return text.strip()
 
 def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, token: str = None) -> Dict[str, Any]:
-    """Generate using Hugging Face Inference API (most reliable free option)"""
+    """Generate using Hugging Face Inference API with Phi-3 model"""
     if not token:
-        return {"success": False, "error": "HF token required. Add HF_API_TOKEN to Secrets.", "text": None}
+        return {"success": False, "error": "HF token required. Add HF_API_TOKEN to Streamlit Secrets.", "text": None}
     
-    # Use a reliable, fast model
-    model = "meta-llama/Llama-3.2-3B-Instruct"
+    # ✅ Working model: Phi-3-mini (fast, reliable, free tier friendly)
+    model = "microsoft/Phi-3-mini-4k-instruct"
     url = f"https://api-inference.huggingface.co/models/{model}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
-    # Format for Llama 3 chat template
-    full_prompt = f"<|start_header_id|>system<|end_header_id|>\n\n{system}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+    # Phi-3 chat template
+    full_prompt = f"<|system|>\n{system}<|end|>\n<|user|>\n{prompt}<|end|>\n<|assistant|>\n"
     
     payload = {
         "inputs": full_prompt,
@@ -72,6 +70,9 @@ def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, t
         if response.status_code == 503:
             return {"success": False, "error": "Model is loading. Wait 30s and try again.", "text": None}
         
+        if response.status_code == 410:
+            return {"success": False, "error": "Model endpoint deprecated. Try a different model.", "text": None}
+        
         response.raise_for_status()
         result = response.json()
         
@@ -87,7 +88,6 @@ def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, t
         text = re.sub(r'```json\s*|\s*```', '', text)
         
         if is_json:
-            # Try to parse JSON
             try:
                 data = json.loads(text)
                 return {"success": True, "data": data, "text": text}
@@ -105,18 +105,16 @@ def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, t
         
     except requests.exceptions.Timeout:
         return {"success": False, "error": "Request timed out. Try again.", "text": None}
-    except requests.exceptions.RequestException as e:
-        return {"success": False, "error": f"API error: {str(e)}", "text": None}
     except Exception as e:
-        return {"success": False, "error": f"Unexpected error: {str(e)}", "text": None}
+        return {"success": False, "error": f"API error: {str(e)}", "text": None}
 
 def generate_suno_prompt(config: Dict[str, str], max_mode: bool = True, vocal_directing: bool = True) -> Dict[str, Any]:
-    """Main generation function"""
+    """Main generation function - Hugging Face with Phi-3"""
     
-    # Use Hugging Face (most reliable)
+    # Get HF token
     token = os.getenv("HF_API_TOKEN")
     if not token:
-        return {"error": "HF_API_TOKEN not set in Streamlit Secrets"}
+        return {"error": "HF_API_TOKEN not set in Streamlit Secrets. Add it and redeploy."}
     
     # Prepare prompts
     vocal_instructions = ""
@@ -135,9 +133,9 @@ Topic: {config.get('topic', '')}
 Vocal: {config.get('vocalType', 'Male')}
 {vocal_instructions}
 Include [Style: {config.get('vocalType')} Vocal] at start.
-Return JSON: {{\"title\": \"...\", \"lyrics\": \"...\"}}"""
+Return JSON: {{"title": "...", "lyrics": "..."}}"""
     
-    # Generate
+    # Generate with HF
     style_result = generate_with_huggingface(style_task, SUNO_EXPERT_SYSTEM, False, token)
     lyrics_result = generate_with_huggingface(lyrics_task, SUNO_EXPERT_SYSTEM, True, token)
     
@@ -146,7 +144,7 @@ Return JSON: {{\"title\": \"...\", \"lyrics\": \"...\"}}"""
     if not lyrics_result.get("success"):
         return {"error": f"Lyrics failed: {lyrics_result.get('error')}"}
     
-    # Process
+    # Process results
     raw_style = validate_suno_tags(style_result["data"])
     content = lyrics_result["data"]
     
