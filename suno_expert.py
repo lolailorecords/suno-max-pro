@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Detect if running on Streamlit Cloud
+IS_CLOUD = "STREAMLIT_RUNTIME" in os.environ
+
 # 🔧 Verified Suno tags reference
 SUNO_STRUCTURE_TAGS = ["Intro", "Verse", "Pre-Chorus", "Chorus", "Post-Chorus", "Bridge", "Outro", "Hook", "Break", "Drop", "Buildup", "Fade Out", "Instrumental", "Solo"]
 SUNO_VOCAL_TAGS = ["Male Vocal", "Female Vocal", "Duet", "Choir", "Whisper", "Spoken Word", "Rap", "Falsetto", "Belting", "Growl", "Harmonies"]
@@ -66,7 +69,7 @@ def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_ke
     genai.configure(api_key=api_key)
     
     model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
+        model_name="gemini-2.0-flash-exp",
         system_instruction=system
     )
     
@@ -92,8 +95,17 @@ def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_ke
     return {"success": True, "data": text, "text": text}
 
 def generate_with_ollama(prompt: str, system: str, is_json: bool = False, model: str = None, base_url: str = None) -> Dict[str, Any]:
-    """Generate using local Ollama instance (perfect for M4 Mac)"""
-    import ollama
+    """Generate using local Ollama instance (ONLY works on local Mac, NOT on Cloud)"""
+    
+    # 🔧 FIX: Block Ollama on Streamlit Cloud
+    if IS_CLOUD:
+        return {"success": False, "error": "Ollama cannot run on Streamlit Cloud. Please use Gemini or Hugging Face backend.", "text": None}
+    
+    # Lazy import (only import when actually using Ollama)
+    try:
+        import ollama
+    except ImportError:
+        return {"success": False, "error": "Ollama package not installed. Run: pip install ollama", "text": None}
     
     model = model or os.getenv("OLLAMA_MODEL", "llama3.2:3b")
     base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -169,7 +181,11 @@ def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, m
 def generate_suno_prompt(config: Dict[str, str], max_mode: bool = True, vocal_directing: bool = True) -> Dict[str, Any]:
     """Main function: Generate Suno prompt with selected backend"""
     
-    backend = os.getenv("AI_BACKEND", "ollama").lower()
+    backend = os.getenv("AI_BACKEND", "gemini").lower()
+    
+    # 🔧 FIX: Force Gemini on Cloud if Ollama is selected
+    if IS_CLOUD and backend == "ollama":
+        backend = "gemini"
     
     # Prepare prompts
     vocal_instructions = ""
@@ -201,7 +217,7 @@ Return JSON with title and lyrics."""
     if backend == "gemini":
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            return {"error": "Gemini API key not set in .env"}
+            return {"error": "Gemini API key not set. Add GEMINI_API_KEY in Streamlit Secrets."}
         
         style_result = generate_with_gemini(style_task, SUNO_EXPERT_SYSTEM, False, api_key)
         lyrics_result = generate_with_gemini(lyrics_task, SUNO_EXPERT_SYSTEM, True, api_key)
@@ -216,7 +232,7 @@ Return JSON with title and lyrics."""
     elif backend == "huggingface":
         token = os.getenv("HF_API_TOKEN")
         if not token:
-            return {"error": "Hugging Face token not set in .env"}
+            return {"error": "Hugging Face token not set. Add HF_API_TOKEN in Streamlit Secrets."}
         
         style_result = generate_with_huggingface(style_task, SUNO_EXPERT_SYSTEM, False, token=token)
         lyrics_result = generate_with_huggingface(lyrics_task, SUNO_EXPERT_SYSTEM, True, token=token)
