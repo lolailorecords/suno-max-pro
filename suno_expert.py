@@ -60,49 +60,71 @@ def validate_suno_tags(text: str) -> str:
     return text.strip()
 
 def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_key: str = None) -> Dict[str, Any]:
-    """Generate using Google Gemini API"""
+    """Generate using Google Gemini API with fallback models"""
     import google.generativeai as genai
-    from google.api_core.exceptions import InvalidArgument, PermissionDenied, ResourceExhausted
+    from google.api_core.exceptions import InvalidArgument, PermissionDenied, ResourceExhausted, NotFound
     
     if not api_key:
-        raise ValueError("Gemini API key required")
+        return {"success": False, "error": "Gemini API key not set. Add GEMINI_API_KEY in Streamlit Secrets.", "text": None}
     
     genai.configure(api_key=api_key)
     
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",  # ✅ Fixed: Stable model name
-        system_instruction=system
-    )
+    # 🔧 Try multiple model names (in order of preference)
+    model_names_to_try = [
+        "gemini-2.0-flash-exp",      # Newest (if available)
+        "gemini-1.5-flash",          # Stable flash
+        "gemini-1.5-flash-001",      # Specific version
+        "gemini-1.5-pro",            # Pro model
+        "gemini-pro",                # Older but reliable
+        "models/gemini-1.5-flash",   # Alternative format
+    ]
     
-    generation_config = {}
-    if is_json:
-        generation_config["response_mime_type"] = "application/json"
+    last_error = None
     
-    try:
-        response = model.generate_content(
-            prompt,
-            generation_config=generation_config
-        )
-        
-        text = response.text.strip()
-        text = re.sub(r'```json\s*|\s*```', '', text)
-        
-        if is_json:
-            try:
-                return {"success": True, "data": json.loads(text), "text": text}
-            except json.JSONDecodeError:
-                return {"success": False, "error": "Invalid JSON response from Gemini", "text": text}
-        
-        return {"success": True, "data": text, "text": text}
-        
-    except InvalidArgument as e:
-        return {"success": False, "error": f"Invalid request: {str(e)}. Check model name and API key permissions.", "text": None}
-    except PermissionDenied as e:
-        return {"success": False, "error": f"API Key permission denied: {str(e)}. Check your Gemini API dashboard.", "text": None}
-    except ResourceExhausted as e:
-        return {"success": False, "error": f"Rate limit exceeded: {str(e)}. Wait a moment and try again.", "text": None}
-    except Exception as e:
-        return {"success": False, "error": f"Gemini API error: {str(e)}", "text": None}
+    for model_name in model_names_to_try:
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system
+            )
+            
+            generation_config = {}
+            if is_json:
+                generation_config["response_mime_type"] = "application/json"
+            
+            response = model.generate_content(
+                prompt,
+                generation_config=generation_config,
+                request_options={"timeout": 60}
+            )
+            
+            text = response.text.strip()
+            text = re.sub(r'```json\s*|\s*```', '', text)
+            
+            if is_json:
+                try:
+                    return {"success": True, "data": json.loads(text), "text": text, "model_used": model_name}
+                except json.JSONDecodeError:
+                    return {"success": False, "error": "Invalid JSON response from Gemini", "text": text, "model_used": model_name}
+            
+            return {"success": True, "data": text, "text": text, "model_used": model_name}
+            
+        except NotFound:
+            last_error = f"Model {model_name} not found"
+            continue  # Try next model
+        except InvalidArgument as e:
+            last_error = f"Invalid request for {model_name}: {str(e)}"
+            continue
+        except PermissionDenied as e:
+            return {"success": False, "error": f"API Key permission denied: {str(e)}. Check your Gemini API dashboard.", "text": None}
+        except ResourceExhausted as e:
+            return {"success": False, "error": f"Rate limit exceeded: {str(e)}. Wait a moment and try again.", "text": None}
+        except Exception as e:
+            last_error = f"Error with {model_name}: {str(e)}"
+            continue
+    
+    # All models failed
+    return {"success": False, "error": f"All Gemini models failed. Last error: {last_error}. Try checking your API key at aistudio.google.com", "text": None}
     
     genai.configure(api_key=api_key)
     
