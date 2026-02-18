@@ -1,6 +1,7 @@
 """
 SUNO EXPERT AI MODULE
 Handles prompt generation with multiple backend support
+Optimized for Streamlit Cloud + Gemini API
 """
 import os
 import json
@@ -60,20 +61,25 @@ def validate_suno_tags(text: str) -> str:
     return text.strip()
 
 def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_key: str = None) -> Dict[str, Any]:
-    """Generate using Google Gemini API with fallback models"""
-    import google.generativeai as genai
-    from google.api_core.exceptions import InvalidArgument, PermissionDenied, ResourceExhausted, NotFound
+    """Generate using Google Gemini API with reliable model fallback"""
     
     if not api_key:
         return {"success": False, "error": "Gemini API key not set. Add GEMINI_API_KEY in Streamlit Secrets.", "text": None}
     
+    try:
+        import google.generativeai as genai
+        from google.api_core.exceptions import InvalidArgument, PermissionDenied, ResourceExhausted, NotFound
+    except ImportError:
+        return {"success": False, "error": "google-generativeai package not installed. Add to requirements.txt", "text": None}
+    
     genai.configure(api_key=api_key)
     
-# 🔧 Simplified model list - most reliable for free tier
-model_names_to_try = [
-    "models/gemini-pro",      # ✅ Most reliable fallback
-    "gemini-pro",             # ✅ Alternative format
-]
+    # 🔧 Most reliable models for free tier (try in order)
+    model_names_to_try = [
+        "models/gemini-pro",      # ✅ Most reliable for free tier
+        "gemini-pro",             # ✅ Alternative format
+        "gemini-1.5-flash",       # ✅ If available in your region
+    ]
     
     last_error = None
     
@@ -94,78 +100,64 @@ model_names_to_try = [
                 request_options={"timeout": 60}
             )
             
+            if not response.text:
+                last_error = f"Empty response from {model_name}"
+                continue
+            
             text = response.text.strip()
+            # Clean markdown code blocks if present
             text = re.sub(r'```json\s*|\s*```', '', text)
             
             if is_json:
                 try:
-                    return {"success": True, "data": json.loads(text), "text": text, "model_used": model_name}
+                    data = json.loads(text)
+                    return {"success": True, "data": data, "text": text, "model_used": model_name}
                 except json.JSONDecodeError:
+                    # Fallback: try to extract JSON from text
+                    json_match = re.search(r'\{.*\}', text, re.DOTALL)
+                    if json_match:
+                        try:
+                            data = json.loads(json_match.group())
+                            return {"success": True, "data": data, "text": text, "model_used": model_name}
+                        except:
+                            pass
                     return {"success": False, "error": "Invalid JSON response from Gemini", "text": text, "model_used": model_name}
             
             return {"success": True, "data": text, "text": text, "model_used": model_name}
             
         except NotFound:
-            last_error = f"Model {model_name} not found"
-            continue  # Try next model
+            last_error = f"Model {model_name} not found for your API key"
+            continue
         except InvalidArgument as e:
             last_error = f"Invalid request for {model_name}: {str(e)}"
             continue
         except PermissionDenied as e:
-            return {"success": False, "error": f"API Key permission denied: {str(e)}. Check your Gemini API dashboard.", "text": None}
+            return {"success": False, "error": f"API Key permission denied: {str(e)}. Check your key at aistudio.google.com", "text": None}
         except ResourceExhausted as e:
-            return {"success": False, "error": f"Rate limit exceeded: {str(e)}. Wait a moment and try again.", "text": None}
+            return {"success": False, "error": f"Rate limit exceeded: {str(e)}. Wait 60 seconds and try again.", "text": None}
         except Exception as e:
-            last_error = f"Error with {model_name}: {str(e)}"
+            last_error = f"Error with {model_name}: {type(e).__name__} - {str(e)}"
             continue
     
     # All models failed
-return {"success": False, "error": f"All Gemini models failed. Last error: {last_error}. Try using 'models/gemini-pro' or check your API key at aistudio.google.com", "text": None}    
-    genai.configure(api_key=api_key)
-    
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=system
-    )
-    
-    generation_config = {}
-    if is_json:
-        generation_config["response_mime_type"] = "application/json"
-    
-    response = model.generate_content(
-        prompt,
-        generation_config=generation_config
-    )
-    
-    text = response.text.strip()
-    # Clean markdown if present
-    text = re.sub(r'```json\s*|\s*```', '', text)
-    
-    if is_json:
-        try:
-            return {"success": True, "data": json.loads(text), "text": text}
-        except json.JSONDecodeError:
-            return {"success": False, "error": "Invalid JSON response", "text": text}
-    
-    return {"success": True, "data": text, "text": text}
+    return {"success": False, "error": f"All Gemini models failed. Last error: {last_error}. Try creating a new API key at aistudio.google.com", "text": None}
 
 def generate_with_ollama(prompt: str, system: str, is_json: bool = False, model: str = None, base_url: str = None) -> Dict[str, Any]:
-    """Generate using local Ollama instance (ONLY works on local Mac, NOT on Cloud)"""
+    """Generate using local Ollama instance (ONLY works locally, NOT on Cloud)"""
     
-    # 🔧 FIX: Block Ollama on Streamlit Cloud
+    # 🔧 Block Ollama on Streamlit Cloud
     if IS_CLOUD:
         return {"success": False, "error": "Ollama cannot run on Streamlit Cloud. Please use Gemini or Hugging Face backend.", "text": None}
     
-    # Lazy import (only import when actually using Ollama)
+    # Lazy import (only import when actually using Ollama locally)
     try:
         import ollama
     except ImportError:
-        return {"success": False, "error": "Ollama package not installed. Run: pip install ollama", "text": None}
+        return {"success": False, "error": "Ollama package not installed. Run: pip install ollama (local only)", "text": None}
     
     model = model or os.getenv("OLLAMA_MODEL", "llama3.2:3b")
     base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     
-    # Format messages for Ollama
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt}
@@ -176,13 +168,12 @@ def generate_with_ollama(prompt: str, system: str, is_json: bool = False, model:
             model=model,
             messages=messages,
             format="json" if is_json else None,
-            options={"temperature": 0.3}
+            options={"temperature": 0.3, "num_predict": 2048}
         )
         
         text = response["message"]["content"].strip()
         
         if is_json:
-            # Clean and parse JSON
             text = re.sub(r'```json\s*|\s*```', '', text)
             try:
                 return {"success": True, "data": json.loads(text), "text": text}
@@ -192,17 +183,18 @@ def generate_with_ollama(prompt: str, system: str, is_json: bool = False, model:
         return {"success": True, "data": text, "text": text}
         
     except Exception as e:
-        return {"success": False, "error": f"Ollama error: {str(e)}", "text": None}
+        return {"success": False, "error": f"Ollama error: {type(e).__name__} - {str(e)}", "text": None}
 
 def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, model: str = "meta-llama/Llama-3.2-3B-Instruct", token: str = None) -> Dict[str, Any]:
-    """Generate using Hugging Face Inference API"""
+    """Generate using Hugging Face Inference API (free tier fallback)"""
+    
     if not token:
-        raise ValueError("Hugging Face token required")
+        return {"success": False, "error": "Hugging Face token not set. Add HF_API_TOKEN in Streamlit Secrets.", "text": None}
     
     url = f"https://api-inference.huggingface.co/models/{model}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
-    # Format for HF API
+    # Format for HF chat template
     full_prompt = f"<|system|>\n{system}</s>\n<|user|>\n{prompt}</s>\n<|assistant|>\n"
     
     payload = {
@@ -210,35 +202,54 @@ def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, m
         "parameters": {
             "max_new_tokens": 1024,
             "temperature": 0.3,
-            "return_full_text": False
+            "return_full_text": False,
+            "do_sample": True
         }
     }
     
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        response.raise_for_status()
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
         
+        if response.status_code == 503:
+            return {"success": False, "error": "Hugging Face model is loading. Wait 30 seconds and try again.", "text": None}
+        
+        response.raise_for_status()
         result = response.json()
-        text = result[0]["generated_text"].strip() if isinstance(result, list) else result["generated_text"].strip()
+        
+        if isinstance(result, list) and len(result) > 0:
+            text = result[0].get("generated_text", "").strip()
+        elif isinstance(result, dict):
+            text = result.get("generated_text", "").strip()
+        else:
+            text = str(result).strip()
+        
         text = re.sub(r'```json\s*|\s*```', '', text)
         
         if is_json:
             try:
                 return {"success": True, "data": json.loads(text), "text": text}
             except json.JSONDecodeError:
-                return {"success": False, "error": "Invalid JSON from HF", "text": text}
+                json_match = re.search(r'\{.*\}', text, re.DOTALL)
+                if json_match:
+                    try:
+                        return {"success": True, "data": json.loads(json_match.group()), "text": text}
+                    except:
+                        pass
+                return {"success": False, "error": "Invalid JSON from Hugging Face", "text": text}
         
         return {"success": True, "data": text, "text": text}
         
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "error": f"HF API error: {type(e).__name__} - {str(e)}", "text": None}
     except Exception as e:
-        return {"success": False, "error": f"HF API error: {str(e)}", "text": None}
+        return {"success": False, "error": f"Unexpected error: {type(e).__name__} - {str(e)}", "text": None}
 
 def generate_suno_prompt(config: Dict[str, str], max_mode: bool = True, vocal_directing: bool = True) -> Dict[str, Any]:
     """Main function: Generate Suno prompt with selected backend"""
     
     backend = os.getenv("AI_BACKEND", "gemini").lower()
     
-    # 🔧 FIX: Force Gemini on Cloud if Ollama is selected
+    # 🔧 Force Gemini on Cloud if Ollama is selected
     if IS_CLOUD and backend == "ollama":
         backend = "gemini"
     
@@ -251,21 +262,21 @@ def generate_suno_prompt(config: Dict[str, str], max_mode: bool = True, vocal_di
 • Example: [Female Vocal] [Breathy] [Verse 1] ... (soft whisper: "yeah")"""
     
     # Style prompt generation
-    is_artist = bool(re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*$', config["genre"]))
-    style_task = f"Create a Suno style prompt for \"{config['genre']}\"."
+    is_artist = bool(re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*$', config.get("genre", "")))
+    style_task = f"Create a Suno style prompt for \"{config.get('genre', '')}\"."
     if is_artist:
         style_task += " This is an ARTIST NAME. Analyze their PRODUCTION STYLE: instrumentation, vocal processing, era, mixing techniques. Convert to technical Suno tags."
     else:
         style_task += " This is a GENRE. Focus on characteristic instruments, production style, and mood."
-    if config["bpm"].upper() != "AUTO":
+    if config.get("bpm", "AUTO").upper() != "AUTO":
         style_task += f" Include BPM: {config['bpm']} at the end."
     
     # Lyrics prompt generation
-    lyrics_task = f"""Write song lyrics in {config['language']}.
-TOPIC: {config['topic']}
-VOCAL TYPE: {config['vocalType']}
+    lyrics_task = f"""Write song lyrics in {config.get('language', 'English')}.
+TOPIC: {config.get('topic', '')}
+VOCAL TYPE: {config.get('vocalType', 'Male')}
 {vocal_instructions}
-CRITICAL: Include [Style: {config['vocalType']} Vocal, {config['genre']}] at the very start of lyrics.
+CRITICAL: Include [Style: {config.get('vocalType', 'Male')} Vocal, {config.get('genre', '')}] at the very start of lyrics.
 Return JSON with title and lyrics."""
     
     # Select backend
@@ -292,12 +303,12 @@ Return JSON with title and lyrics."""
         style_result = generate_with_huggingface(style_task, SUNO_EXPERT_SYSTEM, False, token=token)
         lyrics_result = generate_with_huggingface(lyrics_task, SUNO_EXPERT_SYSTEM, True, token=token)
     else:
-        return {"error": f"Unknown backend: {backend}"}
+        return {"error": f"Unknown backend: {backend}. Use 'gemini', 'ollama', or 'huggingface'."}
     
     # Handle errors
-    if not style_result["success"]:
+    if not style_result.get("success"):
         return {"error": f"Style generation failed: {style_result.get('error')}"}
-    if not lyrics_result["success"]:
+    if not lyrics_result.get("success"):
         return {"error": f"Lyrics generation failed: {lyrics_result.get('error')}"}
     
     # Process results
@@ -308,16 +319,24 @@ Return JSON with title and lyrics."""
     final_style = f"{MAX_MODE_TAGS}\n{raw_style}" if max_mode else raw_style
     
     # Build lyrics with required tags
-    bpm_tag = f"[BPM: {config['bpm']}]\n" if config["bpm"].upper() != "AUTO" else ""
-    enhanced_lyrics = f"""[Style: {config['vocalType']} Vocal, {raw_style}]
-[Duration: {config['duration']}]
+    bpm_tag = f"[BPM: {config['bpm']}]\n" if config.get("bpm", "AUTO").upper() != "AUTO" else ""
+    
+    if isinstance(content, dict):
+        lyrics_content = content.get("lyrics", "")
+        title = content.get("title", "Untitled")
+    else:
+        lyrics_content = str(content)
+        title = "Untitled"
+    
+    enhanced_lyrics = f"""[Style: {config.get('vocalType', 'Male')} Vocal, {raw_style}]
+[Duration: {config.get('duration', '2:30min')}]
 {bpm_tag}
-{content['lyrics'] if isinstance(content, dict) else content}"""
+{lyrics_content}"""
     
     return {
         "success": True,
         "style_prompt": validate_suno_tags(final_style),
-        "title": content.get("title", "Untitled") if isinstance(content, dict) else "Untitled",
+        "title": title.strip() if title else "Untitled",
         "lyrics": validate_suno_tags(enhanced_lyrics),
         "backend_used": backend
     }
