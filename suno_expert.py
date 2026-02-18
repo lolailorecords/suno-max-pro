@@ -1,6 +1,6 @@
 """
-SUNO EXPERT AI MODULE - Hugging Face (Phi-3 Model)
-Reliable prompt generation for Suno AI
+SUNO EXPERT AI MODULE - Groq Backend
+Fast, reliable prompt generation for Suno AI
 """
 import os
 import json
@@ -41,48 +41,44 @@ def validate_suno_tags(text: str) -> str:
     text = re.sub(r'\[([^\]]+)\](\s*\[\1\])+', r'[\1]', text)
     return text.strip()
 
-def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, token: str = None) -> Dict[str, Any]:
-    """Generate using Hugging Face Inference API with Phi-3 model"""
-    if not token:
-        return {"success": False, "error": "HF token required. Add HF_API_TOKEN to Streamlit Secrets.", "text": None}
+def generate_with_groq(prompt: str, system: str, is_json: bool = False, api_key: str = None) -> Dict[str, Any]:
+    """Generate using Groq Cloud API (fast, reliable, free tier)"""
+    if not api_key:
+        return {"success": False, "error": "Groq API key required. Add GROQ_API_KEY to Streamlit Secrets.", "text": None}
     
-    # ✅ Working model: Phi-3-mini (fast, reliable, free tier friendly)
-    model = "microsoft/Phi-3-mini-4k-instruct"
-    url = f"https://api-inference.huggingface.co/models/{model}"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    
-    # Phi-3 chat template
-    full_prompt = f"<|system|>\n{system}<|end|>\n<|user|>\n{prompt}<|end|>\n<|assistant|>\n"
-    
-    payload = {
-        "inputs": full_prompt,
-        "parameters": {
-            "max_new_tokens": 1024,
-            "temperature": 0.2,
-            "return_full_text": False,
-            "do_sample": True
-        }
+    # Groq API endpoint
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
     
+    # Use Llama 3.1 8B (fast, reliable, good instruction following)
+    model = "llama-3.1-8b-instant"
+    
+    # Format messages for Groq/OpenAI-compatible API
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt}
+    ]
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 1024,
+    }
+    
+    # If JSON output requested, add instruction to prompt (Groq doesn't support response_format in free tier)
+    if is_json:
+        payload["messages"][-1]["content"] += "\n\nIMPORTANT: Respond with valid JSON only, no extra text."
+    
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=90)
-        
-        if response.status_code == 503:
-            return {"success": False, "error": "Model is loading. Wait 30s and try again.", "text": None}
-        
-        if response.status_code == 410:
-            return {"success": False, "error": "Model endpoint deprecated. Try a different model.", "text": None}
-        
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
-        result = response.json()
         
-        # Extract text from response
-        if isinstance(result, list) and result:
-            text = result[0].get("generated_text", "").strip()
-        elif isinstance(result, dict):
-            text = result.get("generated_text", "").strip()
-        else:
-            text = str(result).strip()
+        result = response.json()
+        text = result["choices"][0]["message"]["content"].strip()
         
         # Clean markdown
         text = re.sub(r'```json\s*|\s*```', '', text)
@@ -105,16 +101,23 @@ def generate_with_huggingface(prompt: str, system: str, is_json: bool = False, t
         
     except requests.exceptions.Timeout:
         return {"success": False, "error": "Request timed out. Try again.", "text": None}
+    except requests.exceptions.HTTPError as e:
+        if response.status_code == 429:
+            return {"success": False, "error": "Rate limit exceeded. Wait 10 seconds and try again.", "text": None}
+        elif response.status_code == 401:
+            return {"success": False, "error": "Invalid Groq API key. Check your key at console.groq.com", "text": None}
+        else:
+            return {"success": False, "error": f"Groq API error ({response.status_code}): {str(e)}", "text": None}
     except Exception as e:
-        return {"success": False, "error": f"API error: {str(e)}", "text": None}
+        return {"success": False, "error": f"Unexpected error: {str(e)}", "text": None}
 
 def generate_suno_prompt(config: Dict[str, str], max_mode: bool = True, vocal_directing: bool = True) -> Dict[str, Any]:
-    """Main generation function - Hugging Face with Phi-3"""
+    """Main generation function - Groq backend"""
     
-    # Get HF token
-    token = os.getenv("HF_API_TOKEN")
-    if not token:
-        return {"error": "HF_API_TOKEN not set in Streamlit Secrets. Add it and redeploy."}
+    # Get Groq token
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return {"error": "GROQ_API_KEY not set in Streamlit Secrets. Add it and redeploy."}
     
     # Prepare prompts
     vocal_instructions = ""
@@ -135,9 +138,9 @@ Vocal: {config.get('vocalType', 'Male')}
 Include [Style: {config.get('vocalType')} Vocal] at start.
 Return JSON: {{"title": "...", "lyrics": "..."}}"""
     
-    # Generate with HF
-    style_result = generate_with_huggingface(style_task, SUNO_EXPERT_SYSTEM, False, token)
-    lyrics_result = generate_with_huggingface(lyrics_task, SUNO_EXPERT_SYSTEM, True, token)
+    # Generate with Groq
+    style_result = generate_with_groq(style_task, SUNO_EXPERT_SYSTEM, False, api_key)
+    lyrics_result = generate_with_groq(lyrics_task, SUNO_EXPERT_SYSTEM, True, api_key)
     
     if not style_result.get("success"):
         return {"error": f"Style failed: {style_result.get('error')}"}
@@ -164,5 +167,5 @@ Return JSON: {{"title": "...", "lyrics": "..."}}"""
         "style_prompt": validate_suno_tags(final_style),
         "title": title.strip() or "Untitled",
         "lyrics": validate_suno_tags(enhanced_lyrics),
-        "backend_used": "huggingface"
+        "backend_used": "groq"
     }
