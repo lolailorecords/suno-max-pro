@@ -69,15 +69,11 @@ def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_ke
     
     genai.configure(api_key=api_key)
     
-    # 🔧 Try multiple model names (in order of preference)
-    model_names_to_try = [
-        "gemini-2.0-flash-exp",      # Newest (if available)
-        "gemini-1.5-flash",          # Stable flash
-        "gemini-1.5-flash-001",      # Specific version
-        "gemini-1.5-pro",            # Pro model
-        "gemini-pro",                # Older but reliable
-        "models/gemini-1.5-flash",   # Alternative format
-    ]
+# 🔧 Simplified model list - most reliable for free tier
+model_names_to_try = [
+    "models/gemini-pro",      # ✅ Most reliable fallback
+    "gemini-pro",             # ✅ Alternative format
+]
     
     last_error = None
     
@@ -124,8 +120,7 @@ def generate_with_gemini(prompt: str, system: str, is_json: bool = False, api_ke
             continue
     
     # All models failed
-    return {"success": False, "error": f"All Gemini models failed. Last error: {last_error}. Try checking your API key at aistudio.google.com", "text": None}
-    
+return {"success": False, "error": f"All Gemini models failed. Last error: {last_error}. Try using 'models/gemini-pro' or check your API key at aistudio.google.com", "text": None}    
     genai.configure(api_key=api_key)
     
     model = genai.GenerativeModel(
